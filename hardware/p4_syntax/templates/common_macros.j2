@@ -1,0 +1,53 @@
+{%- macro pname(i) -%}in{{ "%02d"|format(i+1) }}{%- endmacro %}
+
+{%- macro pname_mlp_style(loop_idx) -%}
+    {%- set block_num = loop_idx // 8 -%}
+    {%- set index_in_block = loop_idx % 8 -%}
+    {%- set param_val = block_num * 10 + (index_in_block + 1) -%}
+{{- "in" ~ ("%02d"|format(param_val)) -}} 
+{%- endmacro %}
+
+{%- macro render_action_params(num_params, pname_func, width=32, params_per_line=4, indent_spaces=16) -%}
+    {%- for k_param in range(num_params) -%}
+        bit<{{ width }}> {{ pname_func(k_param) }}{{ ", " if not loop.last else "" }}
+        {%- if not loop.last and (loop.index0 + 1) % params_per_line == 0 -%}
+            {{ "\n" ~ (" " * indent_spaces) }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro %}
+
+{% macro render_cluster_action(j, temp_start_l4_idx, temp_end_l4_idx, primary_target, secondary_target, half_partitions, pname_func, additive) %}
+action set_h1_{{ temp_start_l4_idx }}_{{ temp_end_l4_idx }}({{ render_action_params(half_partitions, pname_func) }}) {
+    {% for k in range(8) %}
+        ig_md.{{ primary_target }}.l32_{{ k + 1 }} = {{ pname_func(k) }}{{ " + ig_md." ~ primary_target ~ ".l32_" ~ (k + 1) if additive else "" }};
+    {% endfor %}
+    {% set remaining = half_partitions - 8 %}
+    {% if remaining > 0 %}
+    {% for k in range(remaining) %}
+        ig_md.{{ secondary_target }}.l32_{{ k + 1 }} = {{ pname_func(8 + k) }}{{ " + ig_md." ~ secondary_target ~ ".l32_" ~ (k + 1) if additive else "" }};
+    {% endfor %}
+    {% endif %}
+    }
+{% endmacro %}
+
+{% macro render_linear_action(action_name, target_linear, num_fields, pname_func, additive) -%}
+action {{ action_name }}({{ render_action_params(num_fields, pname_func) }}) {
+    {% for i in range(num_fields) %}
+        ig_md.{{ target_linear }}.l32_{{ i + 1 }} = {{ pname_func(i) }}{{ " + ig_md." ~ target_linear ~ ".l32_" ~ (i + 1) if additive else "" }};
+    {% endfor %}
+    }
+{%- endmacro %}
+
+{% macro render_temp_action(action_name, l4_index) -%}
+action {{ action_name }}(bit<4> in01) {
+        ig_md.temp.l4_{{ l4_index }} = in01;
+    }
+{% endmacro %}
+
+{% macro render_output_action(action_name, dst, num_fields, pname_func, width, additive) %}
+action {{ action_name }}({{ render_action_params(num_fields, pname_func, width) }}) {
+    {% for k in range(num_fields) %}
+        {{ dst }}.l32_{{ k + 1 }} = {{ pname_func(k) }}{{ " + " ~ dst ~ ".l32_" ~ (k + 1) if additive else "" }};
+    {% endfor %}
+    }
+{% endmacro %}

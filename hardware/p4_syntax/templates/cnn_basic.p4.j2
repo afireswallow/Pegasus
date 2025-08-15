@@ -1,0 +1,492 @@
+{# --- templates/cnn_basic.p4.j2 --- #}
+/* -*- P4_16 -*- */
+#include <core.p4>
+#include <tna.p4>
+#include "headers.p4"
+#include "util.p4"
+#include "parsers.p4"
+
+{# ==== Input/Output 向量结构信息 ==== #}
+{%- set INPUT_SIZE = ir.input.size %}         {# 输入字段数量，例如 16 #}
+{%- set INPUT_WIDTH = ir.input.bits %}        {# 每个输入字段的位宽，例如 bit<32> → 32 #}
+{%- set OUTPUT_SIZE = ir.output.size %}       {# 输出字段数量，例如 4 #}
+{%- set OUTPUT_WIDTH = ir.output.bits %}      {# 每个输出字段的位宽，例如 bit<32> → 32 #}
+{# ==== dim, stride, clustering_depth 信息 ==== #}
+{%- set PEGASUS_DIM = ir.partition.dim %}
+{%- set PEGASUS_STRIDE = ir.partition.stride %}
+{%- set PEGASUS_CLUSTERING_DEPTH = ir.map.clustering_depth %}
+{# ==== CNN 参数 ==== #}
+{% set CNN_KERNEL = ir.cnn.kernel %}
+{% set CNN_STRIDE = ir.cnn.stride %}
+{% set CNN_DIM = ir.cnn.dimension %}
+{% set CNN_LAYER_NUM = (CNN_DIM - 1) // 3 + 1 %}
+{# ----- 参数配置 ----- #}
+{% set NUM_X_BLOCKS = INPUT_SIZE // 2 %}
+{% set X_RANGE = range(1, NUM_X_BLOCKS + 1) %}
+{% set STAGE_OFFSET = 0 %}            {# 每层stage偏移量 #}
+{% set TEMP_PREFIX = "ig_md.temp.l4_" %}
+{% set INPUT_PREFIX = "hdr.feature.x_" %}
+
+
+{% set stage_map = {
+    0: [1, 8],
+    1: [2, 7],
+    2: [3],
+    3: [4],
+    4: [5],
+    5: [6]
+} %}
+
+{# ========== 宏定义：第一阶段动作与表 (set_xN_1_2 / 3_4) ========== #}
+{% macro render_x1_2_or_3_4_action(name, target_idx) -%}
+    action {{ name }}(bit<4> in01) {
+        {{ TEMP_PREFIX }}{{ target_idx }} = in01;
+    }
+{% endmacro %}
+
+{% macro render_x1_2_or_3_4_table(name, feature, stage) -%}
+    @stage ({{ stage }})
+    table {{ name }} {
+        key = {
+        {% if INPUT_SIZE >= 30 %}
+            {# cnnl 风格: 两个 8-bit 字段 #}
+            {{ INPUT_PREFIX }}{{ feature }}.l8_1: ternary;
+            {{ INPUT_PREFIX }}{{ feature }}.l8_2: ternary;
+        {% else %}
+            {# cnn2 风格: 一个 16-bit 字段 #}
+            {{ INPUT_PREFIX }}{{ feature }}.l16_1: ternary;
+        {% endif %}
+        }
+        actions = {
+            set_{{ name }};
+            noaction;
+        }
+        size = 1024;
+        default_action = noaction();
+        idle_timeout = false;
+    }
+{% endmacro %}
+
+
+{# ========== 宏定义：第二阶段动作与表 (set_xN_1_4 之类) ========== #}
+{% macro render_x1_4_action(name, base_target_fields_for_action_x, CNN_LAYER_NUM) -%}
+{% set params_per_base_pattern = base_target_fields_for_action_x | length %}
+{% set total_params = params_per_base_pattern * CNN_LAYER_NUM %}
+{% set param_list = [] %}
+{% for i in range(total_params) %}
+    {% set _ = param_list.append("bit<16> in%d" % i) %}
+{% endfor %}
+
+action {{ name }}({{ param_list | join(", ") }}) {
+    {%- for p4_layer_idx_0based in range(CNN_LAYER_NUM) %} {# 0-based for cnn_1_*, 1-based for cnn_2_* etc. #}
+        {% set current_p4_layer_num = p4_layer_idx_0based + 1 %} {# 1, 2, ... #}
+        {%- for field_spec in base_target_fields_for_action_x %}
+            {# field_spec is like ["1", 1] or ["1", 2] from cnn_actions[x] #}
+            {% set group_str = field_spec[0] %}      {# "1", "2", or "3" (from base pattern) #}
+            {% set l16_suffix = field_spec[1] %}   {# 1, 2, 3, 4, 5, or 6 (from base pattern) #}
+            {# 计算当前字段对应的输入参数索引 #}
+            {% set input_param_index = loop.index0 + (p4_layer_idx_0based * params_per_base_pattern) %}
+            {{ "\n\t\t" }}ig_md.cnn_{{ current_p4_layer_num }}_{{ group_str }}.l16_{{ l16_suffix }} = in{{ input_param_index }} + ig_md.cnn_{{ current_p4_layer_num }}_{{ group_str }}.l16_{{ l16_suffix }};
+        {%- endfor %}
+    {%- endfor %}
+{{ "\n\t" }}}
+{%- endmacro %}
+
+{% macro render_p2_action(name, target_s, num_params, additive=False) -%}
+{% set params = [] %}
+{% for i in range(1, num_params + 1) %}
+    {% set _ = params.append("bit<16> in%02d" % i) %}
+{% endfor %}
+action {{ name }}({{ params|join(', ') }}) {
+    {%- for i in range(1, num_params + 1) %}
+        {{ "\n\t\t" }}ig_md.s_{{ target_s }}.l16_{{ i }} = in{{ '%02d' % i }}{% if additive %} + ig_md.s_{{ target_s }}.l16_{{ i }}{% endif %};
+    {%- endfor %}
+{{ "\n\t" }}}
+{% endmacro %}
+
+{% macro render_x1_4_table(name, key_fields, stage, table_size) -%}
+    @stage ({{ stage }})
+    table {{ name }} {
+        key = {
+            {{ key_fields[0] }}: exact;
+            {% if key_fields|length > 1 %}
+            {{ key_fields[1] }}: exact;
+            {% endif %}
+        }
+        actions = {
+            set_{{ name }};
+            noaction;
+        }
+        size = {{ table_size }};
+        default_action = noaction();
+        idle_timeout = false;
+    }
+{% endmacro %}
+
+{% macro render_dynamic_table(name, key_fields, table_size, stage=None, match_type='exact') -%}
+    {% if stage is not none %}
+    @stage ({{ stage }})
+    {% endif %}
+    table {{ name }} {
+        key = {
+            {% for field in key_fields %}
+            {{ field }}: {{ match_type }};
+            {% endfor %}
+        }
+        actions = {
+            set_{{ name }};
+            noaction;
+        }
+        size = {{ table_size }};
+        default_action = noaction();
+        idle_timeout = false;
+    }
+{% endmacro %}
+
+{# ========== 宏定义：CNN FC阶段动作与表 ========== #}
+{% macro render_fc_action(name, target, field_prefix, fields, additive=False) %}
+    action {{ name }}({% for i in range(fields | length) %}bit<32> in{{ '%02d' % (i + 1) }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+    {%- for i in range(fields | length) %}
+        {{ "\n\t\t" }}{{ field_prefix }}.{{ target }}.l32_{{ fields[i] }} = in{{ '%02d' % (i + 1) }}{% if additive %} + {{ field_prefix }}.{{ target }}.l32_{{ fields[i] }}{% endif %};
+    {%- endfor %}
+{{ "\n\t" }}}
+{% endmacro %}
+
+{% macro render_fc_temp_action(action_name, l4_index) -%}
+    action {{ action_name }}(bit<4> in01) {
+        ig_md.temp.l4_{{ l4_index }} = in01;
+    }{{ "\n" }}
+{%- endmacro %}
+
+{% macro render_fc_table(name, key_fields, stage) -%}
+    @stage ({{ stage }})
+    table {{ name }} {
+        key = {
+            {{ key_fields[0] }}: ternary;
+            {% if key_fields|length > 1 %}
+            {{ key_fields[1] }}: ternary;
+            {% endif %}
+        }
+        actions = {
+            set_{{ name }};
+            noaction;
+        }
+        size = 1024;
+        default_action = noaction();
+        idle_timeout = false;
+    }
+{% endmacro %}
+
+{# ========== 宏定义：CNN FC阶段动作与表 ========== #}
+{% macro render_fc_action_2(name, target_prefix, field_target, indices, additive) -%}
+    action {{ name }}({% for i in range(indices | length) %}bit<32> in{{ "%02d"|format(i+1) }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+    {% for idx in indices %}
+        {{ target_prefix }}.{{ field_target }}.l32_{{ idx }} = in{{ "%02d"|format(loop.index) }}{% if additive %} + {{ target_prefix }}.{{ field_target }}.l32_{{ idx }}{% endif %};
+    {% endfor %}
+    }
+{% endmacro %}
+
+{% macro render_fc_table_2(name, stage, temp_indices, action_name) -%}
+    @stage ({{ stage }})
+    table {{ name }} {
+        key = {
+        {% for idx in temp_indices %}
+            ig_md.temp.l4_{{ idx }}: exact;
+        {% endfor %}
+        }
+        actions = {
+            {{ action_name }};
+            noaction;
+        }
+        size = 4096;
+        default_action = noaction();
+        idle_timeout = false;
+    }
+{% endmacro %}
+
+{# ========== 宏定义：CNN apply阶段 ========== #}
+{% macro render_fc_name_calls(total_blocks, layer) -%}
+{% for i in range(total_blocks) %}
+    {% set group = 1 + (i // 3) %}
+    {% set name_idx_1 = (i % 3) * 2 + 1 %}
+    {% set name_idx_2 = name_idx_1 + 1 %}
+    {% set base_name = "cnn_%d_%d_%d_%d" % (layer, group, name_idx_1, name_idx_2) %}
+        {{ base_name }}.apply();
+{% endfor %}
+{%- endmacro %}
+
+{# ========== 宏定义：CNN apply阶段 ========== #}
+{% macro render_fc_name(total_blocks, CNN_LAYER_NUM) -%}
+    {% set layers = range(1, CNN_LAYER_NUM + 1) %}
+    {% set groups = (total_blocks + 2) // 3 %}
+    {% for group in range(1, groups + 1) %}
+        {% for layer in layers %}
+            {% for block_offset in range(3) %}
+                {% set i = (group - 1) * 3 + block_offset %}
+                {% if i < total_blocks %}
+                    {% set name_idx_1 = block_offset * 2 + 1 %}
+                    {% set name_idx_2 = name_idx_1 + 1 %}
+                    {% set base_name = "cnn_%d_%d_%d_%d" % (layer, group, name_idx_1, name_idx_2) %}
+        {{ base_name }}.apply();
+                {% endif %}
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+{%- endmacro %}
+
+
+{% macro render_linear_merge(prefix_target, prefix_src, field_target, fields) %}
+{% for i in fields %}
+        {{ prefix_target }}.{{ field_target }}.l32_{{ i }} = {{ prefix_target }}.{{ field_target }}.l32_{{ i }} + {{ prefix_src }}.{{ field_target }}.l32_{{ i }};
+{% endfor %}
+{%- endmacro %}
+
+control SwitchIngress(
+        inout header_t hdr,
+        inout metadata_t ig_md,
+        in ingress_intrinsic_metadata_t ig_intr_md,
+        in ingress_intrinsic_metadata_from_parser_t ig_prsr_md,
+        inout ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md,
+        inout ingress_intrinsic_metadata_for_tm_t ig_tm_md)
+{
+    @symmetric("hdr.ipv4.src_addr", "hdr.ipv4.dst_addr")
+    @symmetric("ig_md.src_port", "ig_md.dst_port")
+    Hash<bit<32>>(HashAlgorithm_t.CRC32) my_symmetric_hash;
+
+    action noaction(){}
+
+// ****cal cnn first
+
+{# ========== 实际生成 ========== #}
+{# --- CNN first phase (x1_1_2 ~ x8_3_4) --- #}
+{% for i in X_RANGE %}
+    {{ render_x1_2_or_3_4_action("set_x%d_1_2" % i, (i - 1) * 2 + 1) }}
+    {{ render_x1_2_or_3_4_action("set_x%d_3_4" % i, (i - 1) * 2 + 2) }}
+{% endfor %}
+
+{% if INPUT_SIZE < 30 %}
+{% for stage, x_list in stage_map.items() %}
+    {% for x in x_list %}
+    {{ render_x1_2_or_3_4_table("x%d_1_2" % x, x, stage) }}
+    {{ render_x1_2_or_3_4_table("x%d_3_4" % x, x, stage) }}
+    {% endfor %}
+{% endfor %}
+{% else %}
+{% for i in X_RANGE %}
+    {% set feature_index_first_table = (loop.index0 * 2) + 1 %}
+    {{ render_x1_2_or_3_4_table("x%d_1_2" % i, feature_index_first_table, 0) }}
+    {% set feature_index_second_table = (loop.index0 * 2) + 2 %}
+    {{ render_x1_2_or_3_4_table("x%d_3_4" % i, feature_index_second_table, 0) }}
+{% endfor %}
+{% endif %}
+
+{# --- CNN second phase --- #}
+// *****cal cnn second
+
+{% set cnn_actions = {
+    1:  [["1",1], ["2",1], ["3",1]],
+    2:  [["1",1], ["1",2], ["2",1], ["2",2], ["3",1], ["3",2]],
+    3:  [["1",1], ["1",2], ["1",3], ["2",1], ["2",2], ["2",3], ["3",1], ["3",2], ["3",3]],
+    4:  [["1",2], ["1",3], ["1",4], ["2",1], ["2",2], ["2",3], ["2",4], ["3",1], ["3",2], ["3",3], ["3",4]],
+    5:  [["1",3], ["1",4], ["1",5], ["2",2], ["2",3], ["2",4], ["2",5], ["3",1], ["3",2], ["3",3], ["3",4]],
+    6:  [["1",4], ["1",5], ["1",6], ["2",3], ["2",4], ["2",5], ["3",2], ["3",3], ["3",4]],
+    7:  [["1",5], ["1",6], ["2",4], ["2",5], ["3",3], ["3",4]],
+    8:  [["1",6], ["2",5], ["3",4]]
+} %}
+
+
+{% if INPUT_SIZE < 30 %}
+{% for i in X_RANGE %}
+    {{ render_x1_4_action("set_x%d_1_4" % i, cnn_actions[i], CNN_LAYER_NUM) }}
+{% endfor %}
+{% else %}
+{# -------INPUT_SIZE >= 30时，p2表的配置------------------- #}
+{% set P2_INPUT_FEATURES = INPUT_SIZE %} {# 在 cnnl 中, P2 的输入是 P1 的输出，所以是 30 #}
+{% set P2_KEY_SIZE = 3 %} {# 每个 p2 表的 key 由 3 个 p1 的输出构成 #}
+{% set P2_NUM_SET_GROUPS = 4 %} {# 前 4 个 p2 action 是直接赋值(set) #}
+{% set P2_ACTION_PARAM_COUNT = 4 %}{# p2 action 的参数数量固定为4 #}
+{# ------------------- 动态计算 ------------------- #}
+{% set P2_NUM_TABLES = P2_INPUT_FEATURES // P2_KEY_SIZE %}{# 计算 p2 阶段的 table/action 数量 #}
+{# ------------------- 动态生成 p2 列表 ------------------- #}
+{% for i in range(P2_NUM_TABLES) %}
+    {% set action_name = 'set_p2_' ~ (i + 1) %}{# 1. 计算 action 的名字 #}
+    {% set is_additive = (i + 1) > P2_NUM_SET_GROUPS %}{# 2. 判断是 set 还是 add 操作 #}
+    {% set target_s_suffix = (i % P2_NUM_SET_GROUPS) + 1 %}{# 3. 计算目标元数据 s_* 的后缀 #}
+    {{ render_p2_action(action_name, target_s_suffix, P2_ACTION_PARAM_COUNT, is_additive) }}{# 4. 直接调用宏，传入计算好的参数 #}
+{% endfor %}
+{% endif %}
+
+{% set x_stage_map = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 2, 8: 1} %}
+{% if INPUT_SIZE < 30 %}
+{% for i in X_RANGE %} 
+    {% set table_name = "x%d_1_4" % i %}
+    {# 动态构建 key_fields 列表 #}
+    {% set keys = [
+        "ig_md.temp.l4_" ~ ((i - 1) * 2 + 1),
+        "ig_md.temp.l4_" ~ ((i - 1) * 2 + 2)
+    ] %}
+    {{ render_dynamic_table(name=table_name, key_fields=keys, table_size=256, stage=x_stage_map[i], match_type='exact')}}
+{% endfor %}
+{% else %}
+{% for i in range(P2_NUM_TABLES) %}
+    {# 计算通用参数 #}
+    {% set current_index = i + 1 %}
+    {% set action_name = 'set_p2_' ~ current_index %}
+    {% set table_name = 'p2_' ~ current_index %}
+    {# 动态构建 key_fields 列表 #}
+    {% set key_start_index = (i * P2_KEY_SIZE) + 1 %}
+    {% set keys = [] %}
+    {% for j in range(P2_KEY_SIZE) %}
+        {% set _ = keys.append("ig_md.temp.l4_" ~ (key_start_index + j)) %}
+    {% endfor %}
+    {# 生成table #}
+    {{ render_dynamic_table(name=table_name, key_fields=keys, table_size=4096,stage=None, match_type='exact') }}
+{% endfor %}
+{% endif %}
+
+// *****cal fc first
+{# ===== 参数配置 ===== #}
+{% set total_blocks = 8 %}
+{% set layer = 1 %}
+{% set field_target = "linear1" %}
+{% set field_indices = [1, 2, 3, 4] %}
+{% set stage_start = 7 %}
+
+{# ===== 动作生成 有两种===== #}
+{% if CNN_LAYER_NUM < 2%}
+{% for i in range(total_blocks) %}
+    {% set group = 1 + (i // 3) %}
+    {# 计算名称后缀的数字部分 #}
+    {% set name_idx_1 = (i % 3) * 2 + 1 %}
+    {% set name_idx_2 = name_idx_1 + 1 %}
+    {% set base_name = "cnn_%d_%d_%d_%d" % (layer, group, name_idx_1, name_idx_2) %}
+    {% set prefix = "hdr.output" if i % 2 == 0 else "ig_md" %}
+    {% set additive = i >= 2 %}
+    {% set stage = 18 if i == total_blocks - 1 else (stage_start + (i // 2)) %}
+    {{ render_fc_action("set_" ~ base_name, field_target, prefix, field_indices, additive) }}
+{% endfor %}
+
+{# ===== 第二种===== #}
+{% elif CNN_LAYER_NUM >= 2%}
+
+{% set l4_index_list = [1] %}
+{% set suffixes = [(1,2), (3,4)] %}
+
+{% for group in range(1, 4) %}
+    {% for layer in [1, 2] %}
+        {% for s in suffixes %}
+            {% set action_name = "set_cnn_%d_%d_%d_%d" % (layer, group, s[0], s[1]) %}
+    {{ render_fc_temp_action(action_name, l4_index_list[0]) }}
+            {% set _ = l4_index_list.__setitem__(0, l4_index_list[0] + 1) %}
+        {% endfor %}
+        {# 仅 group==1 时有 5_6 项 #}
+        {% if group == 1 %}
+            {% set action_name = "set_cnn_%d_%d_5_6" % (layer, group) %}
+    {{ render_fc_temp_action(action_name, l4_index_list[0]) }}
+            {% set _ = l4_index_list.__setitem__(0, l4_index_list[0] + 1) %}
+        {% endif %}
+        {# 仅 group==2 且 layer==2 时插入特殊项 #}
+        {% if group == 2 and layer == 2 %}
+        {% set action_name = "set_cnn_1_2_2_5" %}
+    {{ render_fc_temp_action(action_name, l4_index_list[0]) }}
+            {% set _ = l4_index_list.__setitem__(0, l4_index_list[0] + 1) %}
+        {% endif %}
+    {% endfor %}
+{% endfor %}
+
+{% endif %}
+
+{# ===== 表生成 ===== #}
+
+{% set layers = range(1, CNN_LAYER_NUM + 1) %}
+{% set groups = (total_blocks + 2) // 3 %}
+{% for group in range(1, groups + 1) %}
+    {% for layer in layers %}
+        {% for block_offset in range(3) %}
+            {% set i = (group - 1) * 3 + block_offset %}
+            {% if i < total_blocks %}
+                {% set name_idx_1 = block_offset * 2 + 1 %}
+                {% set name_idx_2 = name_idx_1 + 1 %}
+                {% set base_name = "cnn_%d_%d_%d_%d" % (layer, group, name_idx_1, name_idx_2) %}
+                {% set stage = 8 %}
+                {% set key_fields = [
+                    "ig_md.cnn_%d_%d.l16_%d" % (layer, group, name_idx_1),
+                    "ig_md.cnn_%d_%d.l16_%d" % (layer, group, name_idx_2)
+                ] %}
+    {{ render_fc_table(base_name, key_fields, stage) }}
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+{% endfor %}
+
+
+
+{% if CNN_LAYER_NUM >= 2%}
+// *****cal fc second
+{% set total_blocks = 5 if INPUT_SIZE < 30 else 6 %}
+{% set field_target = "linear1" %}
+{% set field_indices = range(1, OUTPUT_SIZE + 1) %} 
+{% set stage_start = 8 %}
+
+{# ==== First pass: render actions ==== #}
+{% for i in range(1, total_blocks + 1) %}
+    {% set action_name = "set_get_fc_" ~ i %}
+    {% set prefix = "hdr.output" if i % 2 == 1 else "ig_md" %}
+    {% set additive = i >= 3 %}
+    {{ render_fc_action_2(action_name, prefix, field_target, field_indices, additive) }}
+{% endfor %}
+
+{# ==== Second pass: render tables ==== #}
+{% for i in range(1, total_blocks + 1) %}
+    {% set table_name = "get_fc_" ~ i %}
+    {% set action_name = "set_get_fc_" ~ i %}
+    {% set stage = 18 if i == total_blocks else stage_start + ((i - 1) // 2) %}
+    {% set temp_base = (i - 1) * 3 + 1 %}
+    {% set temp_keys = [temp_base, temp_base + 1, temp_base + 2] %}
+    {{ render_fc_table_2(table_name, stage, temp_keys, action_name) }}
+{% endfor %}
+
+
+{% endif %}
+
+// ************************    
+
+    apply
+    {
+// *****cal cnn
+{% for stage, x_list in stage_map.items() %}
+    {% for x in x_list %}
+        x{{ x }}_1_2.apply();
+        x{{ x }}_3_4.apply();
+    {% endfor %}
+    {% for x in x_list %}
+        x{{ x }}_1_4.apply();
+    {% endfor %}
+{% endfor %}
+
+// *****cal fc
+{{ render_fc_name(8, CNN_LAYER_NUM) }}
+
+{# ==== Apply all FC tables ==== #}
+{% if CNN_LAYER_NUM >= 2%}
+{% for i in range(1, total_blocks + 1) %}
+        get_fc_{{ i }}.apply();
+{% endfor %}
+{% endif %}
+{{ render_linear_merge("hdr.output", "ig_md", "linear1", [1, 2, 3, 4]) }}
+
+        hdr.output.setValid();
+
+        hdr.ethernet.dst_addr = 0; //for filter
+    }
+}
+
+
+Pipeline(SwitchIngressParser(),
+         SwitchIngress(),
+         SwitchIngressDeparser(),
+         EmptyEgressParser(),
+         EmptyEgress(),
+         EmptyEgressDeparser()) pipe;
+
+Switch(pipe) main;

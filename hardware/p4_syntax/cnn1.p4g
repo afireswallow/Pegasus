@@ -1,0 +1,34 @@
+/* ───────────────────────────────────────────────
+ *  Pegasus model description for cnn1
+ * ─────────────────────────────────────────────── */
+
+/* Input 向量：16 维，每个字段 8 bit */
+struct InputVec_t {
+    bit<8> input_dim[16]; 
+}
+
+/* Output 向量：4 维，每个字段 32 bit */
+struct OutputVec_t {
+    bit<32> out0;
+    bit<32> out1;
+    bit<32> out2;
+    bit<32> out3;
+}
+
+/* Ingress Metadata */
+struct ig_metadata_t {
+    InputVec_t  input_vec;
+    OutputVec_t output_vec;
+}
+ig_metadata_t meta;
+
+/* Pegasus 主语句 */
+meta.output_vec = SumReduce(
+    Map(
+        Partition(meta.input_vec, dim = 2, stride = 2),
+        clustering_depth = 4,
+        CNN_dimension= 3,
+        CNN_kernel = 1,
+        CNN_stride = 1
+    )
+);

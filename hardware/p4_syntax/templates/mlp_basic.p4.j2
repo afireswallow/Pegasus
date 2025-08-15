@@ -1,0 +1,459 @@
+{# ─── templates/basic.p4.j2 ───────────────────────────────────────────── #}
+/* -*- P4_16 -*- */
+#include <core.p4>
+#include <tna.p4>
+#include "headers.p4"
+#include "util.p4"
+#include "parsers.p4"
+
+{% from "common_macros.j2" import 
+pname, pname_mlp_style, render_action_params, 
+render_cluster_action, render_linear_action, render_temp_action, render_output_action
+with context %}
+
+{# ==== 自动提取 Input/Output 向量结构信息 ==== #}
+{%- set INPUT_SIZE = ir.input.size %}         {# 输入字段数量，例如 16 #}
+{%- set INPUT_WIDTH = ir.input.bits %}        {# 每个输入字段的位宽，例如 bit<32> → 32 #}
+{%- set GROUPS = INPUT_SIZE // 2 %}           {# 每组2个输入字段，Group数量是 input size 的一半 #}
+{%- set OUTPUT_SIZE = ir.output.size %}       {# 输出字段数量，例如 4 #}
+{%- set OUTPUT_WIDTH = ir.output.bits %}      {# 每个输出字段的位宽，例如 bit<32> → 32 #}
+{# ==== 自动提取 dim, stride, clustering_depth 信息 ==== #}
+{%- set PEGASUS_DIM = ir.partition.dim %}
+{%- set PEGASUS_STRIDE = ir.partition.stride %}
+{%- set PEGASUS_CLUSTERING_DEPTH = ir.map.clustering_depth %}
+{%- set PEGASUS_PARTITIONS = ((INPUT_SIZE - ir.partition.dim) // ir.partition.stride) + 1  %}
+{%- set HALF_PARTITIONS = (PEGASUS_PARTITIONS // 2) %}
+
+{# --- H1 Cluster Global Configuration --- #}
+{% set CFG_H1_CLUSTER_GROUP = 3 %}
+{% set CFG_H1_NUM_L4_FIELDS = 0 %}
+{% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 0 %}
+{# ---- 动态设置字段总数 ---- #}
+{% if INPUT_SIZE > 32 %}
+    {% set CFG_H1_NUM_L4_FIELDS = PEGASUS_PARTITIONS %}
+    {% set CFG_H1_STAGE_BASE = 10 %}
+{% elif INPUT_SIZE == 32 %}
+    {% set CFG_H1_NUM_L4_FIELDS = PEGASUS_PARTITIONS %}
+    {% set CFG_H1_STAGE_BASE = 7 %}
+{% else %}
+    {% set CFG_H1_NUM_L4_FIELDS = 0 %}
+{% endif %}
+{# ---- 自动判断起始偏移量 ---- #}
+{% if (PEGASUS_PARTITIONS - 1) % CFG_H1_CLUSTER_GROUP == 0 %}
+    {% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 1 %}
+{% else %}
+    {% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 0 %}
+{% endif %}
+
+{# ---- 最终分组数 ---- #}
+{% set EFFECTIVE_NUM_FIELDS = CFG_H1_NUM_L4_FIELDS - CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+{% set CFG_H1_CLUSTER_TABLE_COUNT = (EFFECTIVE_NUM_FIELDS + CFG_H1_CLUSTER_GROUP - 1) // CFG_H1_CLUSTER_GROUP %}
+{# --- H1 Cluster Global Configuration END --- #}
+
+control SwitchIngress(
+        inout header_t hdr,
+        inout metadata_t ig_md,
+        in ingress_intrinsic_metadata_t ig_intr_md,
+        in ingress_intrinsic_metadata_from_parser_t ig_prsr_md,
+        inout ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md,
+        inout ingress_intrinsic_metadata_for_tm_t ig_tm_md)
+{
+    @symmetric("hdr.ipv4.src_addr", "hdr.ipv4.dst_addr")
+    @symmetric("ig_md.src_port", "ig_md.dst_port")
+    Hash<bit<32>>(HashAlgorithm_t.CRC32) my_symmetric_hash;
+
+    action noaction(){}
+
+// ****cal h1
+    {% set first_actions = [
+        ("ip_len_total_len",  "linear", False),
+        ("protocol_tos",      "linear", False),
+        ("ttl_offset",        "linear", True),
+        ("max_min_byte",      "linear", True),
+        ("max_min_ipd",       "linear", True),
+        ("ipd",               "linear", True)
+    ] %}
+
+{% for act_name, initial_linear_prefix, additive in first_actions %}
+    {% if INPUT_SIZE <= 32 %}
+        {% set base_block_suffix_for_action = 1 if loop.index0 % 2 == 0 else 3 %}
+    {% else %}
+        {% set base_block_suffix_for_action = 1 %}
+    {% endif %}
+
+    action set_{{ act_name }}({{ render_action_params(PEGASUS_PARTITIONS, pname_mlp_style, INPUT_WIDTH) }}) {
+        {% for i in range(PEGASUS_PARTITIONS) %}
+        {%- set current_block_offset = (i // 8) %}
+        {%- set actual_block_number = base_block_suffix_for_action + current_block_offset %}
+        {%- set target_linear_field = initial_linear_prefix ~ actual_block_number %}
+        ig_md.{{ target_linear_field }}.l32_{{ (i%8)+1 }} = {{ pname_mlp_style(i) }}{{ " + ig_md." ~ target_linear_field ~ ".l32_" ~ ((i%8)+1) if additive else "" }};
+        {% endfor %}
+    }
+    {% endfor %}
+
+
+    {% set first_layer_keys_map = {
+        "ip_len_total_len": ["ip_len", "ip_total_len"],
+        "protocol_tos": ["protocol", "tos"],
+        "ttl_offset": ["ttl", "offset"],
+        "max_min_byte": ["max_byte", "min_byte"],
+        "max_min_ipd": ["max_ipd", "min_ipd"],
+        "ipd": ["ipd"]
+    } %}
+    {% for act_tuple in first_actions %}
+        {% set idx = loop.index0 %}
+        {% set act_name = act_tuple[0] %}
+        {% set keys_for_table = first_layer_keys_map[act_name] %}
+    
+        {%- if INPUT_SIZE > 32 %} 
+            {%- set stage_num = idx %}
+        {%- else %} 
+            {%- set stage_num = idx // 2 %}
+        {%- endif %}
+
+    @stage ({{ stage_num }})
+    table {{ act_name }} {
+        key = {
+            hdr.feature.{{ keys_for_table[0] }}: ternary;
+            {% if keys_for_table|length > 1 %}
+            hdr.feature.{{ keys_for_table[1] }}: ternary;
+            {% endif %}
+        }
+        actions = {
+            set_{{ act_name }};
+            noaction;
+        }
+        size = 1024;
+        default_action = noaction();
+        idle_timeout = false;
+    }
+    {% endfor %}
+
+{% if INPUT_SIZE < 32 %}
+// ****cal h2
+{% else %}
+// ****cal h2 first
+{% endif %}
+{# --- 特殊的 set_h1_1 --- #}
+{% if INPUT_SIZE <= 32 %}
+    {{ render_linear_action("set_h1_1", "linear3", HALF_PARTITIONS, pname_mlp_style, False) }}
+{% endif %}
+{# --- 生成其余的 set_h1_X actions --- #}
+{% set loop_start_index = 1 if INPUT_SIZE <= 32 else 0 %}
+
+{% for i in range(loop_start_index, PEGASUS_PARTITIONS) %}
+    {% set action_name = "set_h1_" ~ (i + 1) %}
+    {% if INPUT_SIZE < 32 %}
+        {% set target_linear = "linear" ~ (4 if (i + 1) % 2 == 0 else 3) %}
+        {% set is_additive = (i + 1) >= 3 %}
+    {{ render_linear_action(action_name, target_linear, HALF_PARTITIONS, pname, is_additive) }}
+    
+    {% elif INPUT_SIZE >= 32 %}
+        {% set l4_idx = i if INPUT_SIZE == 32 else i + 1 %}
+    {{ render_temp_action(action_name, l4_idx) }}
+    {% endif %}
+{% endfor %}
+
+{# --- H1 TEMP Tables  --- #}
+{% for i in range(PEGASUS_PARTITIONS) %}
+    {%- set table_suffix = i + 1 %}
+    {%- set lblock_for_key = 1 + (i // 8) %}
+    {%- set lindex_for_key = (i % 8) + 1 %}
+    {% if INPUT_SIZE < 32 %} 
+        {%- set stage_num = 5 + (i // 2) %}
+    {% elif INPUT_SIZE == 32 %}
+        {%- set stage_num = 5 + (i // 8) %}
+    {% elif INPUT_SIZE > 32 %}
+        {%- set stage_num = 7 + (i // 8) %}
+    {% endif %}
+
+@stage ({{ stage_num }})
+table h1_{{ table_suffix }} {
+    key = {
+        ig_md.linear{{ lblock_for_key }}.l32_{{ lindex_for_key }}: ternary;
+    }
+    actions = {
+        set_h1_{{ table_suffix }};
+        noaction;
+    }
+    size = 1024;
+    default_action = noaction();
+    idle_timeout = false;
+}
+{% endfor %}
+
+{% if INPUT_SIZE >= 32 %}
+// ****cal h2 second
+
+    {% set num_l4_fields_actions = CFG_H1_NUM_L4_FIELDS %}
+    {% set cluster_action_count = (num_l4_fields_actions + CFG_H1_CLUSTER_GROUP - 1) // CFG_H1_CLUSTER_GROUP %}
+    {% for j in range(cluster_action_count) %}
+        {% set temp_start_l4_idx = j * CFG_H1_CLUSTER_GROUP + 1 %}
+        {% set temp_end_l4_idx = min((j + 1) * CFG_H1_CLUSTER_GROUP, num_l4_fields_actions) %}
+        {% if temp_end_l4_idx - temp_start_l4_idx + 1 == CFG_H1_CLUSTER_GROUP %} {# 跳过长度不足的的组 #}
+        {% set action_name_start_suffix = temp_start_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+        {% set action_name_end_suffix = temp_end_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+        {% set additive = (j != 1) if INPUT_SIZE <= 32 else (j >= 2) %}
+        {% set primary_target = "linear3" if INPUT_SIZE <= 32 and j % 2 == 0 else "linear4" if INPUT_SIZE <= 32 else "linear1" if j % 2 == 0 else "linear3" %}
+        {% set secondary_target = "linear3" if INPUT_SIZE <= 32 else ("linear2" if j % 2 == 0 else "linear4") %}
+    {{ render_cluster_action(j, action_name_start_suffix, action_name_end_suffix, primary_target, secondary_target, HALF_PARTITIONS, pname_mlp_style, additive) }}
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+
+{# --- H1 cluster Tables --- #}
+{% if CFG_H1_CLUSTER_TABLE_COUNT > 0 %}
+    {% for j in range(CFG_H1_CLUSTER_TABLE_COUNT) %}
+        {% set temp_start_l4_idx = j * CFG_H1_CLUSTER_GROUP + 1 %}
+        {% set temp_end_l4_idx = min((j + 1) * CFG_H1_CLUSTER_GROUP, CFG_H1_NUM_L4_FIELDS) %}
+        {% if temp_end_l4_idx - temp_start_l4_idx + 1 == CFG_H1_CLUSTER_GROUP %}{# 跳过长度不足的的组 #}
+        {% set table_name_start_suffix = temp_start_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+        {% set table_name_end_suffix = temp_end_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+        @stage ({{ CFG_H1_STAGE_BASE + (j // 2) }})
+        table h1_{{ table_name_start_suffix }}_{{ table_name_end_suffix }} {
+        key = {
+            {% for k_key in range(temp_start_l4_idx, temp_end_l4_idx + 1) %}
+            ig_md.temp.l4_{{ k_key }}: exact;
+            {% endfor %}
+        }
+        actions = {
+            set_h1_{{ table_name_start_suffix }}_{{ table_name_end_suffix }};
+            noaction;
+        }
+        size = 4096;
+        default_action = noaction();
+        idle_timeout = false;
+    }{{ "\n" }}
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+
+// ****cal output
+{# ===== 对于大模型（如 MLP32 以上）采用两阶段输出结构 ===== #}
+{% if INPUT_SIZE > 32 %}
+
+// ****cal output first
+    {# ---- H2 Phase 1: 单字段写入，linear1/2 → temp.l4_x ---- #}
+    {# ---- 生成所有 set_h2_X 动作，每个写入 temp.l4_i ---- #}
+{% for i in range(HALF_PARTITIONS) %}
+    {{ render_temp_action("set_h2_" ~ (i + 1), i + 1) }}
+{% endfor %}
+
+
+    {# ---- 为每个字段生成一张表，以 linear1/2.l32_i 为 key ---- #}
+    {% for i in range(HALF_PARTITIONS) %}
+        {%- set lindex_for_key = (i % 8) + 1 %}
+@stage ({{ 15 + (i // 8) }})
+table h2_{{ i + 1 }} {
+    key = {
+        {{ "ig_md.linear1" if i < 8 else "ig_md.linear2" }}.l32_{{ lindex_for_key }}: ternary;
+    }
+    actions = {
+        set_h2_{{ i + 1 }};
+        noaction;
+    }
+    size = 1024;
+    default_action = noaction();
+    idle_timeout = false;
+}
+
+    {% endfor %}
+
+
+// ****cal output second
+    {# ---- H2 Phase 2: 每 3 个 temp.l4 做 key，输出 PEGASUS_CLUSTERING_DEPTH 个字段到 linear3 或 hdr.output.linear1 ---- #}
+    {% set GROUP_SIZE = 3 %}
+    {% set BLOCKS = (HALF_PARTITIONS + GROUP_SIZE - 1) // GROUP_SIZE %}
+    {% set h2_table_size = 4096 %}
+    {# ---- 设置输出位置：偶数 block 输出到 linear3 / linear2，奇数输出到 output.linear1 ---- #}
+    {% if INPUT_SIZE <= 32 %}
+        {% set even_dst = "ig_md.linear2" %}
+    {% else %}
+        {% set even_dst = "ig_md.linear3" %}
+    {% endif %}
+    {% set odd_dst = "hdr.output.linear1" %}
+    {# ---- 生成 set_h2_X_Y 动作，每个写入 PEGASUS_CLUSTERING_DEPTH 个字段 ---- #}
+{% for i in range(BLOCKS) %}
+    {% set start_idx = i * GROUP_SIZE + 1 %}
+    {% set end_idx = min(start_idx + GROUP_SIZE - 1, HALF_PARTITIONS) %}
+    {% if end_idx - start_idx + 1 == GROUP_SIZE %}
+        {% set dst = "ig_md.linear3" if i % 2 == 0 else "hdr.output.linear1" %}
+        {% set additive = (i >= 2) %}
+        {% set action_name = "set_h2_" ~ start_idx ~ "_" ~ end_idx %}
+    {{ render_output_action(action_name, dst, PEGASUS_CLUSTERING_DEPTH, pname, OUTPUT_WIDTH, additive) }}
+    {% endif %}
+{% endfor %}
+
+    {# ---- 生成 h2_X_Y 表，以 3 个 temp.l4 字段为 key ---- #}
+    {% for i in range(BLOCKS) %}
+        {% set start_idx = i * GROUP_SIZE + 1 %}
+        {% set end_idx = min(start_idx + GROUP_SIZE - 1, HALF_PARTITIONS) %}
+        {% if end_idx - start_idx + 1 == GROUP_SIZE %}
+    @stage ({{ 17 + (i // 2) }})
+    table h2_{{ start_idx }}_{{ end_idx }} {
+       key = {
+            {% for j in range(start_idx, end_idx + 1) %}
+            ig_md.temp.l4_{{ j }}: exact;
+            {% endfor %}
+        }
+        actions = {
+            set_h2_{{ start_idx }}_{{ end_idx }};
+            noaction;
+        }
+        size = {{ h2_table_size }};
+        default_action = noaction();
+        idle_timeout = false;
+    }{{ "\n" }}
+        {% endif %}
+    {% endfor %}
+
+{# ===== 对于小模型（如 MLP16/32），使用简单直接的输出方式 ===== #}
+{% else %}
+
+    {# ---- 计算 H2 输出表的阶段号（均匀分布在 stage15~18） ---- #}
+    {% set h2_stages = [] %}
+    {% for i in range(HALF_PARTITIONS) %}
+        {% set _ = h2_stages.append(15 + (i // 2) % 4) %}
+    {% endfor %}
+
+    {# ---- 每个动作写 PEGASUS_CLUSTERING_DEPTH 个字段，交替写入 linear2 / output.linear1 ---- #}
+{% for i in range(HALF_PARTITIONS) %}
+    {% set dst = "hdr.output.linear1" if i % 2 else "ig_md.linear2" %}
+    {% set additive = (i // 2) > 0 %}
+    {% set action_name = "set_h2_" ~ (i + 1) %}
+    {{ render_output_action(action_name, dst, PEGASUS_CLUSTERING_DEPTH, pname, OUTPUT_WIDTH, additive) }}
+{% endfor %}
+
+
+    {# === 自动计算 H2 表大小 === #}
+    {% set key_fields = 3 %}
+    {% set key_bits_per_field = 4 %}
+    {% set total_key_bits = key_fields * key_bits_per_field %}
+    {% set max_table_entries = 2 ** total_key_bits %}  {# 4096 #}
+    {% if INPUT_SIZE < 48 %}
+        {% set h2_table_size = 1024 %}
+    {% else %}
+        {% set h2_table_size = max_table_entries %}
+    {% endif %}
+
+    {# ---- 生成 h2_i 表，key 取自 linear3.l32_i，动作为 set_h2_i ---- #}
+    {% for i in range(HALF_PARTITIONS) %}
+    @stage ({{ 18 if i == HALF_PARTITIONS - 1 else 15 + (i // 2) }})
+    table h2_{{ i+1 }} {
+        key = {
+            ig_md.linear3.l32_{{ i + 1 }}: ternary;
+        }
+        actions = {
+            set_h2_{{ i+1 }};
+            noaction;
+        }
+        size = {{ h2_table_size }};
+        default_action = noaction();
+        idle_timeout = false;
+    }{{ "\n" }}
+    {% endfor %}
+{% endif %}
+
+
+// ************************    
+
+    apply
+    {
+{% if INPUT_SIZE <= 32 %}
+// *****cal h1 as linear1 linear2
+{% else %}
+// *****cal h1 as linear1 linear2 linear3
+{% endif %}
+        {% for act_tuple in first_actions %}
+        {{ act_tuple[0] }}.apply();
+        {% endfor %}
+
+        {% if INPUT_SIZE <= 32 %}
+        {% for i in range(PEGASUS_PARTITIONS) %}
+        {%- set target_l = "ig_md.linear" ~ (1 + i//8) ~ ".l32_" ~ ((i%8)+1) %}
+        {%- set source_l = "ig_md.linear" ~ (3 + i//8) ~ ".l32_" ~ ((i%8)+1) %}
+        {{ target_l }} = {{ target_l }} + {{ source_l }};
+        {% endfor %}
+        {% endif %}
+
+{% if INPUT_SIZE <= 32 %}
+// *****cal h2 as linear3
+{% else %}
+// *****cal h2 as linear1 linear2
+{% endif %}
+{% for i in range(PEGASUS_PARTITIONS) %}
+        h1_{{ i+1 }}.apply();
+{% endfor %}
+
+{# Apply H1 Cluster Tables using global config variables #}
+{% if CFG_H1_CLUSTER_TABLE_COUNT > 0 %}
+    {% for j in range(CFG_H1_CLUSTER_TABLE_COUNT) %}
+        {% set temp_start_l4_idx = j * CFG_H1_CLUSTER_GROUP + 1 %}
+        {% set temp_end_l4_idx = min((j + 1) * CFG_H1_CLUSTER_GROUP, CFG_H1_NUM_L4_FIELDS) %}
+        {% if temp_end_l4_idx - temp_start_l4_idx + 1 == CFG_H1_CLUSTER_GROUP %}{# 跳过长度不足的的组 #}
+            {% set table_name_start_suffix = temp_start_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+            {% set table_name_end_suffix = temp_end_l4_idx + CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+        h1_{{ table_name_start_suffix }}_{{ table_name_end_suffix }}.apply();
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+{# --- Aggregation Logic After H1 --- #}
+{% if INPUT_SIZE >= 8 %}
+    {% if INPUT_SIZE <= 32 %}
+        {% for k in range(HALF_PARTITIONS) %}
+        ig_md.linear3.l32_{{ k + 1 }} = ig_md.linear3.l32_{{ k + 1 }} + ig_md.linear4.l32_{{ k + 1 }};
+        {% endfor %}
+    {% elif INPUT_SIZE > 32 %}
+        {% set num_accum_pair1 = 8 %}
+        {% for k in range(num_accum_pair1) %}
+        ig_md.linear1.l32_{{ k + 1 }} = ig_md.linear1.l32_{{ k + 1 }} + ig_md.linear3.l32_{{ k + 1 }};
+        {% endfor %}
+
+        {% set num_accum_pair2 = HALF_PARTITIONS - num_accum_pair1 %}
+        {% if num_accum_pair2 > 0 %}
+        {% for k in range(num_accum_pair2) %}
+        ig_md.linear2.l32_{{ k + 1 }} = ig_md.linear2.l32_{{ k + 1 }} + ig_md.linear4.l32_{{ k + 1 }};
+        {% endfor %}
+        {% endif %}
+    {% endif %}
+{% endif %}
+
+// *****cal output as linear3
+        {% for i in range(HALF_PARTITIONS) %}
+        h2_{{ i+1 }}.apply();
+        {% endfor %}
+        {% if INPUT_SIZE > 32 %}
+        {% for i in range(BLOCKS) %}
+        {% set start_idx = i * GROUP_SIZE + 1 %}
+        {% set end_idx   = min(start_idx + GROUP_SIZE - 1, HALF_PARTITIONS) %} 
+        {% if end_idx - start_idx + 1 == GROUP_SIZE %}{# 跳过长度不足的的组 #}
+        h2_{{ start_idx }}_{{ end_idx }}.apply();
+        {%- endif -%}
+        {%- endfor -%}{{ "\n" }} 
+        {% endif %}
+
+        {% set output_sum_src = "ig_md.linear3" if INPUT_SIZE > 32 else "ig_md.linear2" %}
+        {% for k_out_agg in range(OUTPUT_SIZE) %}
+        hdr.output.linear1.l32_{{ k_out_agg + 1 }} = hdr.output.linear1.l32_{{ k_out_agg + 1 }} + {{ output_sum_src }}.l32_{{ k_out_agg + 1 }};
+        {% endfor %}
+
+        hdr.output.setValid();
+
+        ig_tm_md.ucast_egress_port = 280;
+        ig_tm_md.bypass_egress = 1;
+
+        hdr.ethernet.dst_addr = 0; //for filter
+    }
+}
+
+Pipeline(SwitchIngressParser(),
+         SwitchIngress(),
+         SwitchIngressDeparser(),
+         EmptyEgressParser(),
+         EmptyEgress(),
+         EmptyEgressDeparser()) pipe;
+
+Switch(pipe) main;

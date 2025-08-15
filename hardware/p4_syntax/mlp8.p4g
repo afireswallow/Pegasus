@@ -1,0 +1,38 @@
+/* ───────────────────────────────────────────────
+ *  Pegasus model description for mlp8
+ * ─────────────────────────────────────────────── */
+
+/* Input 向量：8 维，每个字段 32 bit */
+struct InputVec_t {
+    bit<32> input_dim0;
+    bit<32> input_dim1;
+    bit<32> input_dim2;
+    bit<32> input_dim3;
+    bit<32> input_dim4;
+    bit<32> input_dim5;
+    bit<32> input_dim6;
+    bit<32> input_dim7;
+}
+
+/* Output 向量：4 维，每个字段 32 bit */
+struct OutputVec_t {
+    bit<32> out0;
+    bit<32> out1;
+    bit<32> out2;
+    bit<32> out3;
+}
+
+/* Ingress Metadata，P4中用于携带中间结果 */
+struct ig_metadata_t {
+    InputVec_t  input_vec;
+    OutputVec_t output_vec;
+}
+ig_metadata_t meta;
+
+/* Pegasus 主语句 */
+meta.output_vec = SumReduce(
+    Map(
+        Partition(meta.input_vec, dim = 2, stride = 2),
+        clustering_depth = 4
+    )
+);

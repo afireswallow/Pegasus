@@ -1,0 +1,28 @@
+/* ───────────────────────────────────────────────
+ *  Pegasus model description for mlp48
+ * ─────────────────────────────────────────────── */
+
+/* Input 向量：48 维，每个字段 32 bit */
+struct InputVec_t {
+       bit<32> input_dim[48]; 
+}
+
+/* Output 向量：4 维，每个字段 32 bit */
+struct OutputVec_t {
+        bit<32> out[4];
+}
+
+/* Ingress Metadata */
+struct ig_metadata_t {
+    InputVec_t  input_vec;
+    OutputVec_t output_vec;
+}
+ig_metadata_t meta;
+
+/* Pegasus 主语句 */
+meta.output_vec = SumReduce(
+    Map(
+        Partition(meta.input_vec, dim = 2, stride = 2), 
+        clustering_depth = 4                       
+    )
+);

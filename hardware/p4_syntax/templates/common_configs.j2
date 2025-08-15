@@ -1,0 +1,37 @@
+{# ==== 自动提取 Input/Output 向量结构信息 ==== #}
+{%- set INPUT_SIZE = ir.input.size %}         {# 输入字段数量，例如 16 #}
+{%- set INPUT_WIDTH = ir.input.bits %}        {# 每个输入字段的位宽，例如 bit<32> → 32 #}
+{%- set GROUPS = INPUT_SIZE // 2 %}           {# 每组2个输入字段，Group数量是 input size 的一半 #}
+{%- set OUTPUT_SIZE = ir.output.size %}       {# 输出字段数量，例如 4 #}
+{%- set OUTPUT_WIDTH = ir.output.bits %}      {# 每个输出字段的位宽，例如 bit<32> → 32 #}
+{# ==== 自动提取 dim, stride, clustering_depth 信息 ==== #}
+{%- set PEGASUS_DIM = ir.partition.dim %}
+{%- set PEGASUS_STRIDE = ir.partition.stride %}
+{%- set PEGASUS_CLUSTERING_DEPTH = ir.map.clustering_depth %}
+{%- set PEGASUS_PARTITIONS = ((INPUT_SIZE - ir.partition.dim) // ir.partition.stride) + 1  %}
+{%- set HALF_PARTITIONS = (PEGASUS_PARTITIONS // 2) %}
+
+{# --- H1 Cluster Global Configuration --- #}
+{% set CFG_H1_CLUSTER_GROUP = 3 %}
+{% set CFG_H1_NUM_L4_FIELDS = 0 %}
+{% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 0 %}
+{# ---- 动态设置字段总数 ---- #}
+{% if INPUT_SIZE > 32 %}
+    {% set CFG_H1_NUM_L4_FIELDS = PEGASUS_PARTITIONS %}
+    {% set CFG_H1_STAGE_BASE = 10 %}
+{% elif INPUT_SIZE == 32 %}
+    {% set CFG_H1_NUM_L4_FIELDS = PEGASUS_PARTITIONS %}
+    {% set CFG_H1_STAGE_BASE = 7 %}
+{% else %}
+    {% set CFG_H1_NUM_L4_FIELDS = 0 %}
+{% endif %}
+{# ---- 自动判断起始偏移量 ---- #}
+{% if (PEGASUS_PARTITIONS - 1) % CFG_H1_CLUSTER_GROUP == 0 %}
+    {% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 1 %}
+{% else %}
+    {% set CFG_H1_L4_IDX_OFFSET_FOR_NAMES = 0 %}
+{% endif %}
+{# ---- 最终分组数 ---- #}
+{% set EFFECTIVE_NUM_FIELDS = CFG_H1_NUM_L4_FIELDS - CFG_H1_L4_IDX_OFFSET_FOR_NAMES %}
+{% set CFG_H1_CLUSTER_TABLE_COUNT = (EFFECTIVE_NUM_FIELDS + CFG_H1_CLUSTER_GROUP - 1) // CFG_H1_CLUSTER_GROUP %}
+{# --- H1 Cluster Global Configuration END --- #}
