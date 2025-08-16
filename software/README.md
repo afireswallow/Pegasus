@@ -6,14 +6,14 @@ This repository contains the software components of **Pegasus**, including train
 
 ## 📂 Project Structure
 
-- **`dataset`** — Processed datasets  
+- [**`dataset`**](./dataset/) — Processed datasets  
   - `ISCXVPN`, `PeerRush`, `CICIOT2022`: normal traffic  
   - `malicious_traffic`: for autoencoder testing
-- **`util`** - Toolkits
-- **`model`** — Implementations of CNN (B/M/L), MLP, RNN, Autoencoder  
-- **`save`** — Pre-trained & quantized model weights  
-- **`quickdemo`** — Reproduce results with pre-trained weights 
-- **`train_net`** — Optional, for model retraining
+- [**`util`**](./util/) - Toolkits
+- [**`model`**](./model/) — Implementations of CNN (B/M/L), MLP, RNN, Autoencoder  
+- [**`save`**](./save/) — Pre-trained & quantized model weights  
+- [**`quickdemo`**](./quickdemo/) — Reproduce results with pre-trained weights 
+- [**`train_net`**](./train_net/) — Optional, for model retraining
 
 ---
 
