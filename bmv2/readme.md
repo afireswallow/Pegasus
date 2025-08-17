@@ -72,15 +72,14 @@ CICIOT2022 as an example:
 │   └── p4runtime_lib
 │       
 ├── bmv2logs
-├── start_switch.sh
-└── start_veth.sh
+└── start_switch.sh
 ```
 ---
 ## 🚀 Usage Guide
 
-```shell
-# convert dataset and model
 
+### convert dataset and model
+```shell
 ## Full test，convert and test
 python convert_pkl_mlp.py --model_path "model.pt" --test_data_path "test.csv" --dataset_type "CICIOT2022" --output_pkl_path "output.pkl" --dataset_pkl_path "dataset.pkl"
 
@@ -90,35 +89,43 @@ python convert_pkl_mlp.py --model_path "model.pt" --test_data_path "test.csv" --
 ## specific device
 python convert_pkl_mlp.py --model_path "model.pt" --test_data_path "test.csv" --dataset_type "CICIOT2022" --device "cpu" --test_only
 
+```
 
-# At first you need to execute ./start_veth.sh
+### Quick start
+At first you need to execute ./start_veth.sh to start the veth for bmv2 to test, packets will be sent to veth0 and forwarded from veth1
 
-./start_veth.sh
+```shell
+./start_veth.sh   
+```
 
+Use Scripts to simplify the process
+```shell
+./p4_your_project/start_switch.sh                 # compile p4 and start bmv2
 
-# Use Scripts to simplify the process
+python3 p4_your_project/control/mlp32_control.py  # start control plane
+```
 
-./p4_your_project/start_switch.sh
+The detailed execution instructions are as follows
+```shell
+cd p4_[Dataset_name]
 
-python3 p4_your_project/control/mlp32_control.py
-
-
-# Or execute commands below:
-
-p4c-bm2-ss --target bmv2 --arch v1model --p4runtime-files p4_CICIOT2022/build/mlp_CICIOT_.p4info.txt -o p4_CICIOT2022/build/mlpCICIOT.json p4_CICIOT2022/basic.p4
+p4c-bm2-ss --target bmv2 --arch v1model --p4runtime-files p4_[Dataset_name]/build/mlp_[Dataset_name]_.p4info.txt -o p4_[Dataset_name]/build/mlp_[Dataset_name].json p4_[Dataset_name]/basic.p4
 
 mkdir bmv2logs
 
 mkdir build
 
-./start_veth.sh
+sudo simple_switch_grpc -i 0@veth0 -i 1@veth1 --log-console --no-p4  -- --grpc-server-addr 127.0.0.1:50051 build/mlp_[Dataset_name].json > bmv2logs/run_switch.log 2>&1
 
-sudo simple_switch_grpc -i 0@veth0 -i 1@veth1 --log-console --no-p4  -- --grpc-server-addr 127.0.0.1:50051 build/mlp_CICIOT.json > bmv2logs/run_switch.log 2>&1
+python3 control/mlp32_control.py # please execute this command in a new terminal
+```
 
-python3 control/mlp32_control.py
+Finally, send packets to test our project, you need to set $P4_PATH, and due to the performance limitations of BMV2, packet loss is inevitable. 
 
+We recommend using a method to limit the packet sending rate to slow down this phenomenon in order to obtain results closer to the paper.
+```shell
 sudo $P4_HOME/p4dev-python-venv/bin/python send_recieve/listen_veth.py
 
-sudo tcpreplay --pps=10 -i veth0 /path/to/your.pcap
+sudo tcpreplay --pps=100 -i veth0 /path/to/your.pcap
 ```
 
