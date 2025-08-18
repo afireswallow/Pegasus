@@ -96,6 +96,7 @@ python cannl_modifydata.py
 ```
 
 
+
 - Autoencoder
 ```
 python -m train_net.run_origin_autoencoder \
@@ -109,14 +110,38 @@ python -m train_net.run_mm_autoencoder \
   --savepth /YOUR_SAVE_PTH \
   --trainpth /TRAIN_PTH \
   --device DEVICENAME \
+  --ptpth /TRAINED_WEIGHT_PTH \
   --LSTPTH /LOOKUP_INIT_VALUES
 ```
 
 
 ⚙️ Fixed-point Quantization + Primitive Fusion
-	•	Convert and quantize models:
+- CNN-B / CNN-M / RNN / MLP: repalce MODEL_convert with specific model name,such as cnnb_convert.
 ```
-python util.reset.py
+python -m convert.MODEL_convert \
+  --dataset DATASET_NAME \
+  --savepth /YOUR_SAVE_PTH \
+  --testpth /TEST_PTH \
+  --ptpth /TRAINED_WEIGHT_PTH \
 ```
 
-Pre-trained & converted weights are available in /save — see Section 5 for quick demo instructions.
+- Autoencoder:
+```
+python -m convert.autoencoder_convert \
+  --dataset DATASET_NAME \
+  --ptpth /TRAINED_WEIGHT_PTH \
+```
+
+- CNN-L:
+```
+python -m convert.MODEL_convert \
+  --dataset DATASET_NAME \
+  --savepth /YOUR_SAVE_PTH \
+  --testpth /TEST_PTH \
+  --ptpth1 /TRAINED_WEIGHT_OF_MODELNUM2_PTH \
+  --ptpth1 /TRAINED_WEIGHT_OF_MODELNUM4_PTH \
+```
+
+
+
+To minimize precision loss, Quantization-Aware Training (QAT) can be employed. Pre-trained & converted weights are available in /save — see Section 5 for quick demo instructions.
