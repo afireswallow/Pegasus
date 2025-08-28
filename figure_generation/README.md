@@ -13,3 +13,9 @@ Simply run `python ./code/Figure8.py` to generate the result. The output will be
 ## 📂 Figure 9
 <!-- ownload the real runtime data collected from hardware (see **[`dataset`](dataset)**). -->
 Simply run `python ./code/Figure9.py` to generate the result. The output will be available at `./figures/Figure9.pdf`.
+
+## 📂 Figure 10 a,b,c
+Simply run `python ./code/Figure10a_b_c.py` to generate the result. The output will be available at `./figures/Figure10_a.pdf`,`./figures/Figure10_b.pdf`,`./figures/Figure10_c.pdf`.
+
+## 📂 Figure 10 d
+Simply run `python ./code/Figure10d.py` to generate the result. The output will be available at `./figures/Figure10_d.pdf`.
