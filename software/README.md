@@ -39,7 +39,13 @@ pip install -r requirements.txt
 
 ### 1. Quick Demo with Provided Weights
 
-* Run ```python -m quickdemo.MODELtest --dataset /DATASET_NAME --ptpth /WEIGHTS_PTH --testpth /DATASET_PTH``` to obtain the simulated hardware deployment results of the specified models(MLP, CNN-B, CNN-M, CNN-L, RNN). For example, to verify the result of CNN-L of PeerRush, you can run ```python -m quickdemo.cnnLtest --dataset PeerRush --ptpth save/cnnL/PeerRush/CNNL_PeerRush.pt --testpth dataset/PeerRush/redeal_test.json --device 0```
+* Run ```python -m quickdemo.MODELtest --dataset /DATASET_NAME --ptpth /WEIGHTS_PTH --testpth /DATASET_PTH --device DEVICE_NAME``` to obtain the simulated hardware deployment results of the specified models(MLP, CNN-B, CNN-M, CNN-L, RNN). 
+
+  * **Examples**:
+    * To verify CNN-L of PeerRush on cpu, you can run: 
+  ```python -m quickdemo.cnnLtest --dataset PeerRush --ptpth save/cnnL/PeerRush/CNNL_PeerRush.pt --testpth dataset/PeerRush/redeal_test.json --device cpu```
+    * To verify CNN-L of PeerRush on GPU 0, you can run:
+  ```python -m quickdemo.cnnLtest --dataset PeerRush --ptpth save/cnnL/PeerRush/CNNL_PeerRush.pt --testpth dataset/PeerRush/redeal_test.json --device 0```
 
 * ⚠️ **Notes on Accuracy Differences**: The accuracy results reproduced with this artifact may show slight deviations from those reported in the paper, due to the following factors:
 	1.	Missing initial model weights – The original .pth files used in the paper were lost. The current models were retrained from scratch, which may lead to minor accuracy differences.
