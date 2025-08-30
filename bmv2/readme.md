@@ -17,6 +17,14 @@ Given these differences — and our limited development resources — **this rel
 ---
 
 ## ⚙️ Environment Setup
+We **strongly recommend** using the [Ubuntu 20.04 virtual machine image](https://drive.google.com/drive/folders/1lsdXo_Fx4KgGiibc1FZCnFRQjFEMTlAK?usp=drive_link) we provide.  
+This image comes with all dependencies pre-installed, ensuring a consistent environment and avoiding potential issues during setup.  
+
+#### 🔧 Alternative: Manual Installation
+
+If you prefer to set up the environment manually, you may follow these steps:
+
+
 Our project is built on an Ubuntu 20.04 virtual machine, with the environment fully installed using the /p4-guide/bin/install-p4dev-v8.sh script.
 ```shell
 $ sudo apt install git     # For Ubuntu
@@ -31,9 +39,6 @@ More necessary dependencies have been included in the requirements.txt
 ```shell
 pip install -r requirement.txt
 ```
-
-Or you may choose to download and use the [virtual machine image](https://drive.google.com/drive/folders/1lsdXo_Fx4KgGiibc1FZCnFRQjFEMTlAK?usp=drive_link
-) we provide.
 
 ---
  
@@ -78,7 +83,7 @@ CICIOT2022 as an example:
 ## 🚀 Usage Guide
 
 
-### convert dataset and model
+### 1. convert dataset and model
 ```shell
 ## Full test，convert and test
 python convert_pkl_mlp.py --model_path "model.pt" --test_data_path "test.csv" --dataset_type "CICIOT2022" --output_pkl_path "output.pkl" --dataset_pkl_path "dataset.pkl"
@@ -91,41 +96,55 @@ python convert_pkl_mlp.py --model_path "model.pt" --test_data_path "test.csv" --
 
 ```
 
-### Quick start
-At first you need to execute ./start_veth.sh to start the veth for bmv2 to test, packets will be sent to veth0 and forwarded from veth1
+### 2. Start the P4 Runtime Environment
 
-```shell
-./start_veth.sh   
+After **setting up the environment (via VM or manual installation)**, you can quickly start the P4 runtime test environment as follows:
+
+```bash
+# Start the veth pair for BMv2 testing
+./start_veth.sh
 ```
 
-Use Scripts to simplify the process
+This script creates a pair of virtual Ethernet interfaces (`veth0` and `veth1`), where packets sent to `veth0` will be forwarded and received from `veth1`. This forms the basic testing setup for BMv2 and your P4 programs.  
+
+### 3. Compile and Launch P4 Program
+
+#### Option 1: Simplified Startup (Recommended for Quick Test)
+
 ```shell
 ./p4_your_project/start_switch.sh                 # compile p4 and start bmv2
-
 python3 p4_your_project/control/mlp32_control.py  # start control plane
 ```
 
-The detailed execution instructions are as follows
+This option provides a convenient one-step startup: it compiles your P4 program, launches BMv2, and starts the control plane to push parameters.
+
+
+
+#### Option 2: Detailed Manual Execution
+
 ```shell
 cd p4_[Dataset_name]
 
 p4c-bm2-ss --target bmv2 --arch v1model --p4runtime-files p4_[Dataset_name]/build/mlp_[Dataset_name]_.p4info.txt -o p4_[Dataset_name]/build/mlp_[Dataset_name].json p4_[Dataset_name]/basic.p4
 
 mkdir bmv2logs
-
 mkdir build
 
-sudo simple_switch_grpc -i 0@veth0 -i 1@veth1 --log-console --no-p4  -- --grpc-server-addr 127.0.0.1:50051 build/mlp_[Dataset_name].json > bmv2logs/run_switch.log 2>&1
+sudo simple_switch_grpc -i 0@veth0 -i 1@veth1 --log-console --no-p4 -- --grpc-server-addr 127.0.0.1:50051 build/mlp_[Dataset_name].json > bmv2logs/run_switch.log 2>&1
 
-python3 control/mlp32_control.py # please execute this command in a new terminal
+python3 control/mlp32_control.py  # run in a new terminal
 ```
 
-Finally, send packets to test our project, you need to set $P4_PATH, and due to the performance limitations of BMV2, packet loss is inevitable. 
+This option shows all intermediate steps explicitly: compilation, log setup, switch launch, and control plane execution. It is useful if you want to inspect logs or customize the runtime behavior.
 
-We recommend using a method to limit the packet sending rate to slow down this phenomenon in order to obtain results closer to the paper.
+### 4. Compile and Start Testing
+
+Once BMv2 is running, you can send and capture packets to evaluate accuracy.  
+Note that due to BMv2 performance limitations, packet loss is expected.  
+We recommend throttling the packet sending rate to get results closer to those in the paper.
+
 ```shell
 sudo $P4_HOME/p4dev-python-venv/bin/python send_recieve/listen_veth.py
 
 sudo tcpreplay --pps=100 -i veth0 /path/to/your.pcap
 ```
-
