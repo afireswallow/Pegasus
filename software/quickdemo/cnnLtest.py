@@ -87,7 +87,7 @@ args = parser.parse_args()
 
 def run(args):
     test_path = args.testpth
-    weight = torch.load(args.ptpth, weights_only=True)
+    weight = torch.load(args.ptpth, weights_only=False)
 
     if args.dataset == "ISCXVPN":
         numclass = 6
