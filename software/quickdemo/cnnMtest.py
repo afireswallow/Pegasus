@@ -125,7 +125,7 @@ def run(args):
         num_classes = 3
     ptpth = args.ptpth
     test_pth = args.testpth
-    weight = torch.load(ptpth, map_location=device, weights_only=True)
+    weight = torch.load(ptpth, map_location=device, weights_only=False)
     model = enlargesegTextCNN_LUT(8, 64, num_classes, 1501, 2561, 10, 8, 32, 4, 2, device)
     model.eval()
     model.load_state_dict(weight)
