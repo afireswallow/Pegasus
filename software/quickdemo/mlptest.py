@@ -93,7 +93,7 @@ def run(args):
     else:
         args.num_classes = 3
     model = mlp_lut(10, args.mlphs1, args.mlphs2, args.num_classes, device,1,2,1)
-    state = torch.load(args.ptpth, weights_only=True)
+    state = torch.load(args.ptpth, weights_only=False)
     model.load_state_dict(state,strict=False)
     test_loss = 0
     correct = 0
