@@ -60,7 +60,7 @@ args = parser.parse_args()
 
 def run(args):
     test_loader = build_data_loader(1501, 2561, 8, args.testpth, 10000, args, is_train=False, shuffle=False)
-    state = torch.load(args.ptpth, weights_only=True)
+    state = torch.load(args.ptpth, weights_only=False)
     if args.device !="cpu":
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{args.device}")
