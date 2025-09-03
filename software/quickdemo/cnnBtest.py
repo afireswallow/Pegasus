@@ -98,7 +98,7 @@ def run(args):
         device = torch.device("cpu")
         args.device = device
     model = cnn_lut(8, num_classes, 1501, 2561, 10, 8, 2, 4, device,2,2)
-    state = torch.load(args.ptpth, weights_only=True)
+    state = torch.load(args.ptpth, weights_only=False)
     test_path = args.testpth
     test_loader = build_data_loader(1501, 2561, 8, test_path, 1000, args, is_train=False, shuffle=False)
     model.load_state_dict(state)
