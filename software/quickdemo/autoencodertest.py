@@ -133,7 +133,16 @@ def run(args):
     neris_loader = build_unified_data_loader(args.len_vocab, args.ipd_vocab, args.window_size, neris_filenames, 256, shuffle=False)
     virut_loader = build_unified_data_loader(args.len_vocab, args.ipd_vocab, args.window_size, virut_filenames, 256, shuffle=False)
     test_loader= build_data_loader(args.len_vocab, args.ipd_vocab, args.window_size, test_path, 256, args, is_train=True, shuffle=True)
-    device = torch.device(f"cuda:{args.device}")
+    if args.device !="cpu":
+        if torch.cuda.is_available():
+            device = torch.device(f"cuda:{args.device}")
+            args.device = device
+        else:
+            print("device error")
+            return "device error"
+    else:
+        device = torch.device("cpu")
+        args.device = device
 
     model = table_splitautoencoder_template(8, 
                 args.len_vocab,args.ipd_vocab,
@@ -141,7 +150,7 @@ def run(args):
                 args.ebdin,64,48,24,12,
                 device)
 
-    state = torch.load(args.ptpth,weights_only=True, map_location=device)
+    state = torch.load(args.ptpth,weights_only=False, map_location=device)
 
     model.load_state_dict(state)
 
