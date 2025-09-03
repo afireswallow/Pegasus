@@ -47,13 +47,16 @@ pip install -r requirements.txt
     * To verify CNN-L of PeerRush on GPU 0, you can run:
   ```python -m quickdemo.cnnLtest --dataset PeerRush --ptpth save/cnnL/PeerRush/CNNL_PeerRush.pt --testpth dataset/PeerRush/redeal_test.json --device 0```
 
+  * **Noticed**：
+    * Dataset_PTH: use ISCXVPN, CICIOT2022, or PeerRush
+      - MLP → CSV file
+      - Others → JSON file
+
 * ⚠️ **Notes on Accuracy Differences**: The accuracy results reproduced with this artifact may show slight deviations from those reported in the paper, due to the following factors:
 	1.	Missing initial model weights – The original .pth files used in the paper were lost. The current models were retrained from scratch, which may lead to minor accuracy differences.
 	2.	Hardware–software mismatch – The hardware implementation is not fully identical to the software simulation. In practice, issues such as register conflicts or packet loss may occur, slightly affecting the results.
 
     Overall, these differences are small and do not affect the validity of the conclusions. 
-
-# todo: 还需要更改
 
 ### 2. Model Training and Quantization (Optional)
 

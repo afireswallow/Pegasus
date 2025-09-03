@@ -177,7 +177,7 @@ def main(args):
     model = bigcnn_template(num_classes,device,6,16)
     model.eval()
     newstate['MM1.LUT'] = get_seg_lut(tempstate1,tempstate2,model)
-    newstate['MM1.H'] = torch.load("convert/cnnl_new_H.pt",weights_only=True)
+    newstate['MM1.H'] = torch.load("convert/cnnl_new_H.pt",weights_only=False)
     newstate['MM1.S'] = state1['MM1.S']
     newstate['MM1.T'] = state1['MM1.T']
 

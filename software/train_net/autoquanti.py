@@ -154,13 +154,13 @@ def quanti_sequence(
                     weight[f'MM{args.modelnum+num-1}.S'] = S
                     weight[f'MM{args.modelnum+num-1}.LUT'] = LUT
                     weight[f'MM{args.modelnum+num-1}.T'] = T
-                    weight[f'MM{args.modelnum+num-1}.H'] = torch.load('./util/H.pth', weights_only=True)
+                    weight[f'MM{args.modelnum+num-1}.H'] = torch.load('./util/H.pth', weights_only=False)
                 else:
                     S, T, LUT = model_quanti(train_data[0],dlist[args.modelnum+num-3],args.modelnum+num-2,pth)
                     weight[f'MM{args.modelnum+num-2}.S'] = S
                     weight[f'MM{args.modelnum+num-2}.LUT'] = LUT
                     weight[f'MM{args.modelnum+num-2}.T'] = T
-                    weight[f'MM{args.modelnum+num-2}.H'] = torch.load('./util/H.pth', weights_only=True)
+                    weight[f'MM{args.modelnum+num-2}.H'] = torch.load('./util/H.pth', weights_only=False)
                 
             else:
                 for i in range(len(train_data)):

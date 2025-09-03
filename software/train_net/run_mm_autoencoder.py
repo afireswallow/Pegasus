@@ -105,11 +105,11 @@ model = MM_splitautoencoder(8,
             args.ebdin,64,48,24,12,
             device)
 newstate = {}
-newstate = torch.load(args.ptpth,weights_only=True, map_location=device)
-newstate['MM.LUT'] = torch.load(f"{args.LSTpth}/LUT.pt",weights_only=True)
-newstate['MM.T'] = torch.load(f"{args.LSTpth}/T.pt",weights_only=True)
-newstate['MM.S'] = torch.load(f"{args.LSTpth}/S.pt",weights_only=True)
-newstate['MM.H'] = torch.load(f"./util/H.pth",weights_only=True)
+newstate = torch.load(args.ptpth,weights_only=False, map_location=device)
+newstate['MM.LUT'] = torch.load(f"{args.LSTpth}/LUT.pt",weights_only=False)
+newstate['MM.T'] = torch.load(f"{args.LSTpth}/T.pt",weights_only=False)
+newstate['MM.S'] = torch.load(f"{args.LSTpth}/S.pt",weights_only=False)
+newstate['MM.H'] = torch.load(f"./util/H.pth",weights_only=False)
 
 result = model.load_state_dict(newstate,strict=False)
 print("Missing keys:", result.missing_keys)

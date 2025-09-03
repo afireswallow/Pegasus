@@ -107,7 +107,7 @@ def main(args):
     sn1=args.sn1
     newstate["lenebdLUT"], newstate["ipdebdLUT"],newT = reset_int_triple_l(newstate["lenebdLUT"], newstate["ipdebdLUT"],state["MM.T"],device,sn1)
     newstate['MM_1.S'] = state['MM.S'][0:15,:,:].view(-1,2,15)
-    newstate['MM_1.H'] = torch.load("convert/cnnl_new_H.pt",weights_only=True) 
+    newstate['MM_1.H'] = torch.load("convert/cnnl_new_H.pt",weights_only=False) 
     newstate['MM_1.T'] = newT[0:15,:].view(-1,15)
     newstate['MM_2.S'] = state['MM.S'][-1,:,:].view(1,2,15)
     newstate['MM_2.H'] = state['MM.H']

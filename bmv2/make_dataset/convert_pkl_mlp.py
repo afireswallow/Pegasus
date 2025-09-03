@@ -52,15 +52,15 @@ elif args.device == 'cuda':
 
 try:
     if device.type == 'cuda':
-        model = torch.load(args.model_path, weights_only=True, map_location=device)
+        model = torch.load(args.model_path, weights_only=False, map_location=device)
         print(f"Model loaded on GPU: {torch.cuda.get_device_name()}")
     else:
-        model = torch.load(args.model_path, weights_only=True, map_location=device)
+        model = torch.load(args.model_path, weights_only=False, map_location=device)
         print("Model loaded on CPU")
 except Exception as e:
     print(f"Error loading model: {e}")
     print("Trying to load on CPU as fallback...")
-    model = torch.load(args.model_path, weights_only=True, map_location='cpu')
+    model = torch.load(args.model_path, weights_only=False, map_location='cpu')
     device = torch.device('cpu')
     print("Model successfully loaded on CPU (fallback)")
 

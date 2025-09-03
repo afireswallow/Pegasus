@@ -131,7 +131,7 @@ def main(args):
     model = enlargesegTextCNN2_getLUT(8, 64,num_classes,1501,2561,10,8,32,4,2,device)
 
     newstate['MM1.LUT'] = get_seg_lut(tempstate,model)
-    newstate['MM1.H'] = torch.load("convert/cnnm_new_H.pt", map_location='cpu', weights_only=True)
+    newstate['MM1.H'] = torch.load("convert/cnnm_new_H.pt", map_location='cpu', weights_only=False)
     newstate['MM1.T'] = state['MM1.T']
     newstate['MM1.S'] = state['MM1.S']
     newstate["lenebdLUT"],newstate["ipdebdLUT"] = reset_embeding_LUT(state["len_embedding.weight"],state["ipd_embedding.weight"],state["fc1.weight"],state["fc1.bias"],device)

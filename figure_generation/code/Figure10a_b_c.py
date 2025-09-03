@@ -80,6 +80,8 @@ def plot_grouped_bar_chart(dataall, labels, xtick_labels, width=0.4, colors=None
         number = 'a'
     else:
         number = 'b'
+
+    os.makedirs("./figures", exist_ok=True)
     plt.savefig(f'figures/Figure10_{number}.pdf', bbox_inches='tight', pad_inches=0.02, dpi=300)
     plt.show()
 

@@ -91,6 +91,7 @@ if __name__ == '__main__':
         fpr_list, tpr_list, auc_list, labels = load_roc_data(data_dir)
         
         # 绘制ROC曲线
+        os.makedirs("./figures", exist_ok=True)
         save_path = f'figures/Figure9_{dataset}.pdf'
         plot_auc_curves(fpr_list, tpr_list, auc_list, labels, title='ROC Curve Comparison', save_path=save_path)
         

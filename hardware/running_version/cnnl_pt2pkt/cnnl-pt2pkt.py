@@ -8,7 +8,7 @@ import pickle
 model = torch.load(
     'CICIOT2022_finalLUT.pt',
     map_location=torch.device('cpu'), 
-    weights_only=True
+    weights_only=False
 )
 max_num = 100000000
 min_num = -max_num

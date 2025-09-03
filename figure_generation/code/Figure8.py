@@ -2,6 +2,8 @@ import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
 import matplotlib.pyplot as plt
+import os
+
 
 max_bits_per_flow = [28, 44, 72]
 f1_score_peerrush = [0.991179,0.992867,0.995416]
@@ -38,4 +40,5 @@ plt.legend(loc="lower right", prop={'size': 12})
 # plt.show()
 plt.margins(x=0.1)
 plt.tight_layout()
+os.makedirs("./figures", exist_ok=True)
 plt.savefig('./figures/Figure8.pdf', bbox_inches='tight', pad_inches=0.02, dpi=300)

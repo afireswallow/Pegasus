@@ -37,7 +37,7 @@ $ ./p4-guide/bin/install-p4dev-v8.sh |& tee log.txt
 
 More necessary dependencies have been included in the requirements.txt
 ```shell
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 ---
