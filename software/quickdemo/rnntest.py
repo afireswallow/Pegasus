@@ -41,7 +41,7 @@ parser.add_argument("--num",type=int, default=2022)
 parser.add_argument("--window_size", type=int, default=8)
 parser.add_argument("--lr", type=float, default=5e-3)
 parser.add_argument("--num_classes", type=int, default=None)
-parser.add_argument("--device",default=0)
+parser.add_argument("--device")
 parser.add_argument("--savepth", type=str, default=None)
 parser.add_argument("--dlist", type=str, default=121)
 parser.add_argument("--ptpth", type=str, default=None)
@@ -60,7 +60,7 @@ args = parser.parse_args()
 
 def run(args):
     test_loader = build_data_loader(1501, 2561, 8, args.testpth, 10000, args, is_train=False, shuffle=False)
-    state = torch.load(args.ptpth, weights_only=False)
+    
     if args.device !="cpu":
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{args.device}")
@@ -77,7 +77,7 @@ def run(args):
     else:
         num_classes = 3
 
-
+    state = torch.load(args.ptpth, map_location=device, weights_only=False)
     model = rnn_lut(8, 8, num_classes, 1501, 2561, 10, 8, device, 0, 1, 1)
 
     state['MM1.T'] = torch.nan_to_num(state['MM1.T'],nan=0.0,posinf=2 ** 11 ,neginf=-2 ** 11)
@@ -118,9 +118,3 @@ if __name__ == '__main__':
 
 
 
-
-"""
-python rnntest.py --dataset CICIOT2022 --testpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/dataset/CICIOT2022/redeal_test.json --ptpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/save/rnn/CICIOT2022/rnn_CICIOT2022_0.8838013484275483.pt --device 0 
-python rnntest.py --dataset ISCXVPN --testpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/dataset/ISCXVPN/redeal_test.json --ptpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/save/rnn/ISCXVPN/rnn_ISCXVPN_0.7661085936716739.pt --device 0 
-python rnntest.py --dataset PeerRush --testpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/dataset/PeerRush/redeal_test.json --ptpth /mnt/sdc_space/oldz/zlx/githubversion/finalfile/save/rnn/PeerRush/rnn_PeerRush_0.9102976579479009.pt --device 0
-"""
