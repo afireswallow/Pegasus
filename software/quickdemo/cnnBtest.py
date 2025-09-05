@@ -44,7 +44,7 @@ parser.add_argument("--num",type=int, default=2022)
 parser.add_argument("--window_size", type=int, default=8)
 parser.add_argument("--lr", type=float, default=5e-3)
 parser.add_argument("--num_classes", type=int, default=None)
-parser.add_argument("--device",default=0)
+parser.add_argument("--device")
 parser.add_argument("--savepth", type=str, default=None)
 parser.add_argument("--dlist", type=str, default=121)
 parser.add_argument("--ptpth", type=str, default=None)
@@ -98,7 +98,7 @@ def run(args):
         device = torch.device("cpu")
         args.device = device
     model = cnn_lut(8, num_classes, 1501, 2561, 10, 8, 2, 4, device,2,2)
-    state = torch.load(args.ptpth, weights_only=False)
+    state = torch.load(args.ptpth, map_location=device, weights_only=False)
     test_path = args.testpth
     test_loader = build_data_loader(1501, 2561, 8, test_path, 1000, args, is_train=False, shuffle=False)
     model.load_state_dict(state)
