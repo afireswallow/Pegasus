@@ -78,7 +78,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument("--dataset",type=str)
 parser.add_argument("--testpth",type=str)
 parser.add_argument("--ptpth",type=str)
-parser.add_argument("--device",default=0)
+parser.add_argument("--device")
 parser.add_argument("--model_name",type=str)
 args = parser.parse_args()
 
@@ -87,7 +87,7 @@ args = parser.parse_args()
 
 def run(args):
     test_path = args.testpth
-    weight = torch.load(args.ptpth, weights_only=False)
+    
 
     if args.dataset == "ISCXVPN":
         numclass = 6
@@ -103,6 +103,7 @@ def run(args):
     else:
         device = torch.device("cpu")
         args.device = device
+    weight = torch.load(args.ptpth,  map_location=device, weights_only=False)
     model = bigcnn_lut(numclass,device,6,16)
 
 
