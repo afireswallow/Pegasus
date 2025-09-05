@@ -52,7 +52,7 @@ parser.add_argument("--num",type=int, default=2021)
 parser.add_argument("--window_size", type=int, default=8)
 parser.add_argument("--lr", type=float, default=5e-3)
 parser.add_argument("--num_classes", type=int, default=None)
-parser.add_argument("--device",default=0)
+parser.add_argument("--device")
 parser.add_argument("--savepth", type=str, default=None)
 parser.add_argument("--dlist", type=str, default=111)
 parser.add_argument("--ptpth", type=str, default=None)
@@ -93,7 +93,7 @@ def run(args):
     else:
         args.num_classes = 3
     model = mlp_lut(10, args.mlphs1, args.mlphs2, args.num_classes, device,1,2,1)
-    state = torch.load(args.ptpth, weights_only=False)
+    state = torch.load(args.ptpth,map_location=device,weights_only=False)
     model.load_state_dict(state,strict=False)
     test_loss = 0
     correct = 0
